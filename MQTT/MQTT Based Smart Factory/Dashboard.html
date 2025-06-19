@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Factory Dashboard</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- MQTT.js library for WebSocket communication -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <!-- Chart.js and date adapter -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        /* Custom styles for the dashboard */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a; /* slate-900 */
+            color: white;
+        }
+    </style>
+</head>
+<body class="bg-slate-900">
+
+    <div class="p-6 max-w-screen-xl mx-auto">
+        <!-- Header -->
+        <header class="flex justify-between items-center mb-6 pb-4 border-b border-slate-700">
+            <h1 class="text-3xl font-bold text-white">Factory Dashboard</h1>
+            <div id="connection-status" class="flex items-center gap-3 bg-slate-800 px-4 py-2 rounded-lg">
+                <!-- Status icon and text will be inserted here by JS -->
+            </div>
+        </header>
+
+        <!-- Overview Stats -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
+            <div id="stat-temp" class="bg-slate-800/80 p-4 rounded-lg flex items-center"></div>
+            <div id="stat-humidity" class="bg-slate-800/80 p-4 rounded-lg flex items-center"></div>
+            <div id="stat-air" class="bg-slate-800/80 p-4 rounded-lg flex items-center"></div>
+            <div id="stat-alarms" class="bg-slate-800/80 p-4 rounded-lg flex items-center"></div>
+        </div>
+
+        <main class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Machines Section -->
+            <div id="machines-grid" class="lg:col-span-3 grid grid-cols-1 xl:grid-cols-3 gap-6">
+                <p id="waiting-msg" class="text-slate-400 xl:col-span-3 text-center py-10">Waiting for machine data...</p>
+            </div>
+        </main>
+        
+        <!-- Alarms & Events Section -->
+        <div class="mt-6">
+             <h2 class="text-2xl font-bold text-white mb-4">Alarms & Events Log</h2>
+             <div id="alarms-panel" class="space-y-4 bg-slate-800 border border-slate-700 rounded-2xl p-6">
+                <p class="text-slate-400 text-center py-4">No recent alarms.</p>
+             </div>
+        </div>
+    </div>
+
+    <script type="module">
+        // --- Configuration ---
+        const MQTT_BROKER_URL = "ws://192.168.1.105:9001";
+        const MQTT_TOPIC = "factory/#";
+        const MAX_DATA_POINTS = 30;
+        
+        // --- Authentication Credentials ---
+        const MQTT_USERNAME = "acm_iot";
+        const MQTT_PASSWORD = "iot";
+        // --------------------------------
+
+        const machines = {};
+        let alarms = [];
+        const chartColors = ['#8884d8', '#82ca9d', '#ffc658', '#ff7300', '#00C49F'];
+
+        // --- DOM Elements ---
+        const connectionStatusEl = document.getElementById('connection-status');
+        const machinesGridEl = document.getElementById('machines-grid');
+        const waitingMsgEl = document.getElementById('waiting-msg');
+        const alarmsPanelEl = document.getElementById('alarms-panel');
+        const statTempEl = document.getElementById('stat-temp');
+        const statHumidityEl = document.getElementById('stat-humidity');
+        const statAirEl = document.getElementById('stat-air');
+        const statAlarmsEl = document.getElementById('stat-alarms');
+
+
+        // --- Helper Functions ---
+        
+        function updateConnectionStatus(status, message = '') {
+            const colorMap = { Connected: 'text-green-400', Connecting: 'text-yellow-400', Disconnected: 'text-red-400' };
+            const iconMap = { Connected: 'wifi', Connecting: 'server', Disconnected: 'wifi-off' };
+            connectionStatusEl.innerHTML = `
+                <i data-lucide="${iconMap[status]}" class="${colorMap[status]}"></i>
+                <span>${status} ${message}</span>`;
+            lucide.createIcons();
+        }
+
+        function updateStatCards(envData) {
+            statTempEl.innerHTML = createStatHTML('thermometer', 'orange', 'Avg. Temp', envData.temperature_c?.toFixed(1) || 'N/A', '°C');
+            statHumidityEl.innerHTML = createStatHTML('droplets', 'blue', 'Avg. Humidity', envData.humidity_percent?.toFixed(1) || 'N/A', '%');
+            statAirEl.innerHTML = createStatHTML('wind', 'teal', 'Air Quality', envData.air_quality_ppm || 'N/A', 'PPM');
+            lucide.createIcons();
+        }
+        
+        function createStatHTML(icon, color, title, value, unit) {
+            return `<div class="p-3 bg-slate-700/50 rounded-lg mr-4"><i data-lucide="${icon}" class="text-${color}-400"></i></div><div><p class="text-sm text-slate-400">${title}</p><p class="text-xl font-bold text-white">${value} <span class="text-base font-normal text-slate-300">${unit}</span></p></div>`;
+        }
+        
+        function updateAlarmsPanel() {
+             statAlarmsEl.innerHTML = createStatHTML('alert-triangle', 'red', 'Active Alarms', alarms.length, '');
+             lucide.createIcons();
+            if (alarms.length === 0) {
+                alarmsPanelEl.innerHTML = '<p class="text-slate-400 text-center py-4">No recent alarms.</p>';
+                return;
+            }
+            alarmsPanelEl.innerHTML = alarms.map(alarm => `<div class="bg-red-500/10 border border-red-500/30 p-3 rounded-lg flex items-center gap-3"><i data-lucide="alert-triangle" class="text-red-400 flex-shrink-0"></i><div><p class="font-semibold text-red-400">${alarm.error_code}</p><p class="text-sm text-slate-300">${alarm.machine_id}</p><p class="text-xs text-slate-400">${new Date(alarm.timestamp * 1000).toLocaleString()}</p></div></div>`).join('');
+            lucide.createIcons();
+        }
+
+        function createOrUpdateMachineCard(data) {
+            const { machine_id, status } = data;
+            let machine = machines[machine_id];
+
+            if (!machine) {
+                const cardEl = document.createElement('div');
+                cardEl.id = `machine-${machine_id}`;
+                cardEl.className = "bg-slate-800 border border-slate-700 rounded-2xl p-6 flex flex-col";
+                machinesGridEl.appendChild(cardEl);
+                
+                const chartCanvas = document.createElement('canvas');
+                cardEl.innerHTML = `<div class="chart-container" style="position: relative; height:250px"></div>`; // Placeholder
+                cardEl.querySelector('.chart-container').appendChild(chartCanvas);
+
+                const chartCtx = chartCanvas.getContext('2d');
+                
+                const newChart = new Chart(chartCtx, {
+                    type: 'line',
+                    data: { labels: [], datasets: [] },
+                    options: {
+                        responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+                        scales: { 
+                          x: { type: 'time', time: { unit: 'second' }, ticks: { color: '#9ca3af' }, grid: { color: '#374151' } },
+                          y: { ticks: { color: '#9ca3af' }, grid: { color: '#374151' } }
+                        },
+                        plugins: { legend: { labels: { color: '#d1d5db' } } }
+                    }
+                });
+
+                machines[machine_id] = { el: cardEl, data: [], chart: newChart, metrics: {} };
+                machine = machines[machine_id];
+                if(waitingMsgEl) waitingMsgEl.remove();
+            }
+            
+            machine.data.push(data);
+            if (machine.data.length > MAX_DATA_POINTS) machine.data.shift();
+
+            // Dynamically add datasets for new metrics
+            Object.keys(data).forEach((key, index) => {
+                if (typeof data[key] === 'number' && key !== 'timestamp' && !machine.metrics[key]) {
+                    machine.metrics[key] = true;
+                    machine.chart.data.datasets.push({
+                        label: key.replace(/_/g, ' '),
+                        data: [],
+                        borderColor: chartColors[index % chartColors.length],
+                        tension: 0.4,
+                        borderWidth: 2,
+                        pointRadius: 0
+                    });
+                }
+            });
+
+            // Update chart data
+            machine.chart.data.labels = machine.data.map(d => d.timestamp * 1000);
+            machine.chart.data.datasets.forEach(dataset => {
+                const key = dataset.label.replace(/ /g, '_');
+                dataset.data = machine.data.map(d => ({ x: d.timestamp * 1000, y: d[key] }));
+            });
+            machine.chart.update('none');
+
+            // Render card HTML
+            const iconMap = { cnc: 'gauge-circle', robot: 'bot', packaging: 'box' };
+            const machineType = Object.keys(iconMap).find(t => machine_id.includes(t)) || 'box';
+            
+            const metricsHTML = Object.entries(data)
+                .filter(([key]) => !['timestamp', 'machine_id', 'status'].includes(key) && !Array.isArray(data[key]))
+                .map(([key, value]) => `<div class="bg-slate-900/70 p-2 rounded-md"><p class="text-slate-400 capitalize text-xs">${key.replace(/_/g, ' ')}</p><p class="font-semibold text-white text-sm">${typeof value === 'number' ? value.toFixed(2) : value}</p></div>`).join('');
+            
+            const headerHTML = `<div class="flex justify-between items-start mb-4"><div class="flex items-center gap-3"><i data-lucide="${iconMap[machineType]}" class="w-8 h-8 text-cyan-400"></i><div><h3 class="text-xl font-bold text-white">${machine_id.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</h3><div class="flex items-center gap-2 mt-1"><div class="w-3 h-3 rounded-full ${status === 'running' ? 'bg-green-500' : status === 'idle' ? 'bg-yellow-500' : 'bg-red-500'}"></div><span class="text-sm text-slate-300 capitalize">${status.replace(/_/g, ' ')}</span></div></div></div>${status === 'error' ? `<div class="p-2 bg-red-500/20 rounded-full"><i data-lucide="alert-triangle" class="w-5 h-5 text-red-400 animate-pulse"></i></div>` : ''}</div>`;
+            const metricsGridHTML = `<div class="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-4">${metricsHTML}</div>`;
+            
+            machine.el.querySelector('.chart-container').previousSibling?.remove();
+            machine.el.querySelector('.chart-container').previousSibling?.remove();
+            machine.el.insertAdjacentHTML('afterbegin', metricsGridHTML);
+            machine.el.insertAdjacentHTML('afterbegin', headerHTML);
+            
+            lucide.createIcons();
+        }
+
+        // --- MQTT Client Logic ---
+        
+        const connectOptions = { username: MQTT_USERNAME, password: MQTT_PASSWORD, clientId: `dashboard_${Math.random().toString(16).substr(2, 8)}` };
+        
+        console.log("Connecting to MQTT broker...");
+        updateConnectionStatus('Connecting');
+        const client = mqtt.connect(MQTT_BROKER_URL, connectOptions);
+
+        client.on('connect', () => { updateConnectionStatus('Connected'); client.subscribe(MQTT_TOPIC); });
+        client.on('reconnect', () => updateConnectionStatus('Connecting'));
+        client.on('close', () => updateConnectionStatus('Disconnected'));
+        client.on('error', (err) => { console.error("Connection error:", err); updateConnectionStatus('Disconnected', `(${err.message})`); });
+        client.on('message', (topic, payload) => {
+            try {
+                const data = JSON.parse(payload.toString());
+                if (topic.includes('telemetry')) { createOrUpdateMachineCard(data); } 
+                else if (topic.includes('environment')) { updateStatCards(data); } 
+                else if (topic.includes('alarms')) {
+                    alarms.unshift({ ...data, id: Date.now() });
+                    if (alarms.length > 10) alarms.pop();
+                    updateAlarmsPanel();
+                }
+            } catch (e) { console.error("Failed to parse message payload:", e); }
+        });
+        
+        // Initial UI setup
+        updateAlarmsPanel();
+        updateStatCards({});
+        lucide.createIcons();
+
+    </script>
+
+</body>
+</html>
