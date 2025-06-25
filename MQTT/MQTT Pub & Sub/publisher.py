@@ -3,14 +3,14 @@ import time
 
 # 1. --- Define MQTT Broker, Topic, and Authentication ---
 # We are using a public broker that supports authentication.
-BROKER_ADDRESS = "192.168.1.105"
+BROKER_ADDRESS = "192.168.137.68"
 MQTT_PORT = 1884
 TOPIC = "iot/class/test" 
 
 # --- Add your authentication credentials here ---
 # These must match the credentials on your MQTT broker.
-MQTT_USERNAME = "acm_iot"
-MQTT_PASSWORD = "iot"
+MQTT_USERNAME = "aadi"
+MQTT_PASSWORD = "qwerty@123456"
 # -----------------------------------------------
 
 # 2. --- Create an MQTT Client ---

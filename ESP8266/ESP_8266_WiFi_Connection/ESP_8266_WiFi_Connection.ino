@@ -3,8 +3,8 @@
 
 // --- WiFi Network Credentials ---
 // Replace the following with your WiFi network's name (SSID) and password.
-const char* ssid = "IoT";
-const char* password = "12345678900k";
+const char* ssid = "KLU_WIFI";
+const char* password = "";
 // --------------------------------
 
 // --- (Optional) Static IP Configuration ---
